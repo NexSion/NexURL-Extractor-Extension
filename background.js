@@ -78,6 +78,17 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     clearTimeout(entry.timer);
     pendingToasts.delete(tabId);
   }
+  // A Referer-spoofing rule may still be alive for this tab (HLS/DASH
+  // streams keep requesting new segments long after the tab reaches
+  // "complete" — cleaning up on "complete" made segments 403 mid-playback).
+  // The tab closing is the real end-of-life signal for the rule.
+  const ruleId = refererRuleByTab.get(tabId);
+  if (ruleId !== undefined) {
+    refererRuleByTab.delete(tabId);
+    chrome.declarativeNetRequest
+      .updateDynamicRules({ removeRuleIds: [ruleId] })
+      .catch((e) => console.error('[NexURL] rule cleanup on tab close failed:', e));
+  }
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -256,6 +267,9 @@ function flushToast(tabId) {
 const DNR_RULE_MIN_ID = 1;
 const DNR_RULE_MAX_ID = 5000;
 let dnrRuleCounter = DNR_RULE_MIN_ID;
+// tabId -> ruleId, so the Referer rule can be torn down when the tab that
+// actually needs it closes, instead of when it merely finishes loading.
+const refererRuleByTab = new Map();
 
 function nextRuleId() {
   const id = dnrRuleCounter;
@@ -315,24 +329,24 @@ async function openWithReferer(url, referer) {
     const tab = await chrome.tabs.create({ url });
 
     if (ruleInstalled) {
-      const cleanup = () => {
-        chrome.declarativeNetRequest
-          .updateDynamicRules({ removeRuleIds: [ruleId] })
-          .catch((e) => console.error('[NexURL] rule cleanup failed:', e));
-      };
-      const onUpdated = (tabId, changeInfo) => {
-        if (tabId === tab.id && changeInfo.status === 'complete') {
-          chrome.tabs.onUpdated.removeListener(onUpdated);
-          cleanup();
-        }
-      };
-      chrome.tabs.onUpdated.addListener(onUpdated);
-      // Safety net in case the tab never reaches 'complete' (closed
-      // early, navigates away, etc.) so the rule doesn't pile up.
+      // Keep the rule alive for as long as this tab exists — HLS/DASH
+      // playback keeps requesting new segments well past the "page load"
+      // point, and those later requests need the spoofed Referer just as
+      // much as the first one did. Actual cleanup happens in
+      // chrome.tabs.onRemoved above, when the user closes/navigates the tab.
+      refererRuleByTab.set(tab.id, ruleId);
+      // Safety net only for the case where tabs.create() itself resolved
+      // but the tab never really came to exist / onRemoved never fires
+      // for some edge case — a generous ceiling, not a playback-length
+      // guess, so normal viewing is never cut off.
       setTimeout(() => {
-        chrome.tabs.onUpdated.removeListener(onUpdated);
-        cleanup();
-      }, 8000);
+        if (refererRuleByTab.get(tab.id) === ruleId) {
+          refererRuleByTab.delete(tab.id);
+          chrome.declarativeNetRequest
+            .updateDynamicRules({ removeRuleIds: [ruleId] })
+            .catch((e) => console.error('[NexURL] rule safety-net cleanup failed:', e));
+        }
+      }, 6 * 60 * 60 * 1000); // 6 hours
     }
 
     return { ok: true, spoofed: ruleInstalled };
