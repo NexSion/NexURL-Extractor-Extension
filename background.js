@@ -25,6 +25,38 @@ function categoryOf(url) {
   return null;
 }
 
+function hostnameOf(url) {
+  try {
+    return new URL(url).hostname;
+  } catch (e) {
+    return '';
+  }
+}
+
+// --- Referer rule lifetime tracking --------------------------------------
+// A single tab can hold more than one active referer rule (e.g. the HLS
+// player installs a domain-wide rule; a plain "Open" installs a single-URL
+// rule). All of them live exactly as long as the tab that needs them —
+// HLS playback keeps requesting new segments for the whole video duration,
+// so cleaning up on page-load-complete (the old behavior) killed the
+// referer spoof mid-playback. Only a generous multi-hour safety net backs
+// this up now, in case a tab-removal event is ever missed.
+const tabRefererRules = new Map(); // tabId -> Set<ruleId>
+
+function trackTabRule(tabId, ruleId) {
+  if (!tabRefererRules.has(tabId)) tabRefererRules.set(tabId, new Set());
+  tabRefererRules.get(tabId).add(ruleId);
+}
+
+function removeTabRules(tabId) {
+  const ids = tabRefererRules.get(tabId);
+  if (!ids || !ids.size) return;
+  tabRefererRules.delete(tabId);
+  chrome.declarativeNetRequest
+    .updateDynamicRules({ removeRuleIds: Array.from(ids) })
+    .catch((e) => console.error('[NexURL] rule cleanup on tab close failed:', e));
+}
+
 async function getTabData(tabId) {
   const key = String(tabId);
   const store = await chrome.storage.session.get(key);
@@ -47,7 +79,53 @@ async function addMedia(tabId, url, category, source) {
   return false; // already known
 }
 
-// Catch media pulled over the network (covers streaming manifests, direct
+// Applies current detect rules to already-stored tab data — used so the
+// popup list and the toolbar badge count always agree, even if a rule
+// was changed after some items were already stored for this tab.
+async function getFilteredMedia(tabId) {
+  const data = await getTabData(tabId);
+  const hostname = data.pageUrl ? hostnameOf(data.pageUrl) : '';
+  const rules = hostname ? await getDetectRules() : {};
+  const site = hostname ? rules[hostname] : null;
+
+  if (site && site.disableAll) {
+    return { pageUrl: data.pageUrl, video: {}, audio: {}, image: {} };
+  }
+  const filtered = { pageUrl: data.pageUrl };
+  ['video', 'audio', 'image'].forEach((cat) => {
+    const kept = {};
+    if (data[cat]) {
+      Object.keys(data[cat]).forEach((url) => {
+        const ext = (extOf(url) || cat).toLowerCase();
+        const isListed = !!(site && site.formats && site.formats[ext]);
+        const allowed = site && site.mode === 'allow' ? isListed : !isListed;
+        if (allowed) kept[url] = data[cat][url];
+      });
+    }
+    filtered[cat] = kept;
+  });
+  return filtered;
+}
+
+async function updateBadge(tabId) {
+  if (tabId === undefined || tabId === null || tabId < 0) return;
+  try {
+    const filtered = await getFilteredMedia(tabId);
+    const count = ['video', 'audio', 'image'].reduce(
+      (sum, cat) => sum + Object.keys(filtered[cat] || {}).length,
+      0
+    );
+    await chrome.action.setBadgeText({ tabId, text: count > 0 ? String(count) : '' });
+    if (count > 0) {
+      await chrome.action.setBadgeBackgroundColor({ tabId, color: '#5B5FEF' });
+      if (chrome.action.setBadgeTextColor) {
+        chrome.action.setBadgeTextColor({ tabId, color: '#FFFFFF' }).catch(() => {});
+      }
+    }
+  } catch (e) {
+    // Tab may already be gone by the time this resolves — harmless.
+  }
+}
 // media requests, CDN assets — anything that hits the network layer).
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
@@ -57,7 +135,10 @@ chrome.webRequest.onBeforeRequest.addListener(
     isDetectionAllowed(details.tabId, ext).then(({ allowed, hostname }) => {
       if (!allowed) return;
       addMedia(details.tabId, details.url, cat, 'network').then((isNew) => {
-        if (isNew) queueToastItem(details.tabId, details.url, cat, hostname);
+        if (isNew) {
+          queueToastItem(details.tabId, details.url, cat, hostname);
+          updateBadge(details.tabId);
+        }
       });
     });
   },
@@ -68,6 +149,7 @@ chrome.webRequest.onBeforeRequest.addListener(
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'loading' && changeInfo.url) {
     setTabData(tabId, { pageUrl: changeInfo.url });
+    chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
   }
 });
 
@@ -78,17 +160,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     clearTimeout(entry.timer);
     pendingToasts.delete(tabId);
   }
-  // A Referer-spoofing rule may still be alive for this tab (HLS/DASH
-  // streams keep requesting new segments long after the tab reaches
-  // "complete" — cleaning up on "complete" made segments 403 mid-playback).
-  // The tab closing is the real end-of-life signal for the rule.
-  const ruleId = refererRuleByTab.get(tabId);
-  if (ruleId !== undefined) {
-    refererRuleByTab.delete(tabId);
-    chrome.declarativeNetRequest
-      .updateDynamicRules({ removeRuleIds: [ruleId] })
-      .catch((e) => console.error('[NexURL] rule cleanup on tab close failed:', e));
-  }
+  removeTabRules(tabId);
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -99,40 +171,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const { allowed, hostname } = await isDetectionAllowed(sender.tab.id, ext);
         if (!allowed) continue;
         const isNew = await addMedia(sender.tab.id, item.url, item.category, 'dom');
-        if (isNew) queueToastItem(sender.tab.id, item.url, item.category, hostname);
+        if (isNew) {
+          queueToastItem(sender.tab.id, item.url, item.category, hostname);
+          updateBadge(sender.tab.id);
+        }
       }
     })();
     return false;
   }
   if (msg.type === 'GET_MEDIA') {
-    (async () => {
-      const data = await getTabData(msg.tabId);
-      const hostname = data.pageUrl ? (() => { try { return new URL(data.pageUrl).hostname; } catch (e) { return ''; } })() : '';
-      const rules = hostname ? await getDetectRules() : {};
-      const site = hostname ? rules[hostname] : null;
-
-      // Defensive re-filter: if a rule was added/changed after items were
-      // already stored for this tab, the popup should still reflect it
-      // immediately rather than waiting for a rescan.
-      if (site && site.disableAll) {
-        sendResponse({ pageUrl: data.pageUrl });
-        return;
-      }
-      const filtered = { pageUrl: data.pageUrl };
-      ['video', 'audio', 'image'].forEach((cat) => {
-        if (!data[cat]) return;
-        const kept = {};
-        Object.keys(data[cat]).forEach((url) => {
-          const ext = (extOf(url) || cat).toLowerCase();
-          const isListed = !!(site && site.formats && site.formats[ext]);
-          const allowed = site && site.mode === 'allow' ? isListed : !isListed;
-          if (!allowed) return;
-          kept[url] = data[cat][url];
-        });
-        filtered[cat] = kept;
-      });
-      sendResponse(filtered);
-    })();
+    getFilteredMedia(msg.tabId).then(sendResponse);
     return true; // keep channel open for async sendResponse
   }
   if (msg.type === 'OPEN_WITH_REFERER') {
@@ -147,6 +195,88 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         console.error('[NexURL] OPEN_WITH_REFERER failed:', e);
         sendResponse({ ok: false, error: String(e) });
       });
+    return true; // keep channel open for async sendResponse
+  }
+  if (msg.type === 'PREPARE_THUMB') {
+    (async () => {
+      if (!msg.url || !msg.referer) {
+        sendResponse({ ok: true, spoofed: false });
+        return;
+      }
+      const ruleId = nextRuleId();
+      try {
+        // Thumbnails load from the popup itself, not a page tab, so there's
+        // no tab-close event to hook cleanup to — a short fixed timeout is
+        // enough since a thumbnail either loads in a couple seconds or not.
+        await chrome.declarativeNetRequest.updateDynamicRules({
+          removeRuleIds: [ruleId],
+          addRules: [
+            {
+              id: ruleId,
+              priority: 1,
+              action: {
+                type: 'modifyHeaders',
+                requestHeaders: [
+                  { header: 'Referer', operation: 'set', value: msg.referer },
+                ],
+              },
+              condition: { urlFilter: msg.url, resourceTypes: ['image'] },
+            },
+          ],
+        });
+        setTimeout(() => {
+          chrome.declarativeNetRequest
+            .updateDynamicRules({ removeRuleIds: [ruleId] })
+            .catch(() => {});
+        }, 15000);
+        sendResponse({ ok: true, spoofed: true });
+      } catch (e) {
+        console.error('[NexURL] PREPARE_THUMB rule failed:', e);
+        sendResponse({ ok: false, error: String(e) });
+      }
+    })();
+    return true; // keep channel open for async sendResponse
+  }
+  if (msg.type === 'PREPARE_HLS_REFERER' && sender.tab) {
+    (async () => {
+      const tabId = sender.tab.id;
+      const hostname = hostnameOf(msg.url);
+      if (!msg.referer || !hostname) {
+        sendResponse({ ok: true, spoofed: false });
+        return;
+      }
+      const ruleId = nextRuleId();
+      try {
+        // hls.js fetches the manifest, then separate sub-playlists,
+        // segments, and keys — usually all from the same host as the
+        // manifest but at different paths, so this rule is scoped to the
+        // whole domain (not one exact URL) rather than a single urlFilter.
+        await chrome.declarativeNetRequest.updateDynamicRules({
+          removeRuleIds: [ruleId],
+          addRules: [
+            {
+              id: ruleId,
+              priority: 1,
+              action: {
+                type: 'modifyHeaders',
+                requestHeaders: [
+                  { header: 'Referer', operation: 'set', value: msg.referer },
+                ],
+              },
+              condition: {
+                requestDomains: [hostname],
+                resourceTypes: ['xmlhttprequest', 'media', 'sub_frame', 'other'],
+              },
+            },
+          ],
+        });
+        trackTabRule(tabId, ruleId);
+        sendResponse({ ok: true, spoofed: true });
+      } catch (e) {
+        console.error('[NexURL] PREPARE_HLS_REFERER rule failed:', e);
+        sendResponse({ ok: false, error: String(e) });
+      }
+    })();
     return true; // keep channel open for async sendResponse
   }
   return false;
@@ -180,6 +310,9 @@ async function getDetectRules() {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'sync' && changes.detectRules) {
     detectRulesCache = changes.detectRules.newValue || {};
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach((tab) => updateBadge(tab.id));
+    });
   }
 });
 
@@ -267,9 +400,6 @@ function flushToast(tabId) {
 const DNR_RULE_MIN_ID = 1;
 const DNR_RULE_MAX_ID = 5000;
 let dnrRuleCounter = DNR_RULE_MIN_ID;
-// tabId -> ruleId, so the Referer rule can be torn down when the tab that
-// actually needs it closes, instead of when it merely finishes loading.
-const refererRuleByTab = new Map();
 
 function nextRuleId() {
   const id = dnrRuleCounter;
@@ -277,8 +407,30 @@ function nextRuleId() {
   return id;
 }
 
+const REFERER_RULE_SAFETY_NET_MS = 4 * 60 * 60 * 1000; // 4h backstop only
+
 async function openWithReferer(url, referer) {
   if (!url) return { ok: false, error: 'missing url' };
+
+  // HLS manifests get routed through our own player page (hls.js) instead
+  // of the raw .m3u8 URL — Chrome's native HLS engine stalls video decode
+  // on some manifests (bitrate/level switches, separate audio/video
+  // renditions) while audio keeps playing. The player page requests its
+  // own (domain-wide) referer rule once it loads, via PREPARE_HLS_REFERER,
+  // so no rule needs to be installed here for this case.
+  if ((extOf(url) || '').toLowerCase() === 'm3u8') {
+    try {
+      const playerUrl =
+        chrome.runtime.getURL('player.html') +
+        '?src=' + encodeURIComponent(url) +
+        (referer ? '&referer=' + encodeURIComponent(referer) : '');
+      await chrome.tabs.create({ url: playerUrl });
+      return { ok: true, spoofed: !!referer, player: true };
+    } catch (e) {
+      console.error('[NexURL] opening HLS player tab failed:', e);
+      return { ok: false, error: String(e) };
+    }
+  }
 
   // No referer to spoof — just open it plainly.
   if (!referer) {
@@ -329,24 +481,16 @@ async function openWithReferer(url, referer) {
     const tab = await chrome.tabs.create({ url });
 
     if (ruleInstalled) {
-      // Keep the rule alive for as long as this tab exists — HLS/DASH
-      // playback keeps requesting new segments well past the "page load"
-      // point, and those later requests need the spoofed Referer just as
-      // much as the first one did. Actual cleanup happens in
-      // chrome.tabs.onRemoved above, when the user closes/navigates the tab.
-      refererRuleByTab.set(tab.id, ruleId);
-      // Safety net only for the case where tabs.create() itself resolved
-      // but the tab never really came to exist / onRemoved never fires
-      // for some edge case — a generous ceiling, not a playback-length
-      // guess, so normal viewing is never cut off.
+      // Lives until the tab closes (or the safety net fires) — NOT on
+      // page-load-complete. A page that keeps making requests after its
+      // initial load (streaming segments, lazy content) needs the
+      // referer spoof for as long as the tab is open.
+      trackTabRule(tab.id, ruleId);
       setTimeout(() => {
-        if (refererRuleByTab.get(tab.id) === ruleId) {
-          refererRuleByTab.delete(tab.id);
-          chrome.declarativeNetRequest
-            .updateDynamicRules({ removeRuleIds: [ruleId] })
-            .catch((e) => console.error('[NexURL] rule safety-net cleanup failed:', e));
-        }
-      }, 6 * 60 * 60 * 1000); // 6 hours
+        chrome.declarativeNetRequest
+          .updateDynamicRules({ removeRuleIds: [ruleId] })
+          .catch(() => {});
+      }, REFERER_RULE_SAFETY_NET_MS);
     }
 
     return { ok: true, spoofed: ruleInstalled };

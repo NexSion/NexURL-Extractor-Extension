@@ -75,6 +75,32 @@ function render() {
     badge.className = `badge badge-${item.category}`;
     badge.textContent = ext || item.category;
 
+    if (item.category === 'image') {
+      const thumb = document.createElement('img');
+      thumb.className = 'thumb loading';
+      thumb.alt = '';
+      thumb.loading = 'lazy';
+      thumb.referrerPolicy = 'no-referrer';
+      thumb.addEventListener('load', () => thumb.classList.remove('loading'));
+      thumb.addEventListener('error', () => {
+        // Hotlink-protected or otherwise unloadable — fall back to just
+        // the badge/text rather than showing a broken image icon.
+        thumb.remove();
+      });
+      if (sourcePageUrl) {
+        chrome.runtime.sendMessage(
+          { type: 'PREPARE_THUMB', url: item.url, referer: sourcePageUrl },
+          () => {
+            void chrome.runtime.lastError;
+            thumb.src = item.url;
+          }
+        );
+      } else {
+        thumb.src = item.url;
+      }
+      li.appendChild(thumb);
+    }
+
     const urlSpan = document.createElement('span');
     urlSpan.className = 'url';
     urlSpan.title = item.url;

@@ -171,6 +171,25 @@ body {
   animation: itemIn 220ms ease both;
 }
 
+.thumb {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: rgba(127, 127, 127, 0.15);
+  border: 1px solid var(--divider);
+}
+.thumb.loading {
+  background: linear-gradient(90deg, rgba(127,127,127,0.12) 25%, rgba(127,127,127,0.24) 37%, rgba(127,127,127,0.12) 63%);
+  background-size: 400% 100%;
+  animation: thumbShimmer 1.4s ease infinite;
+}
+@keyframes thumbShimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
 .badge {
   flex-shrink: 0;
   font-size: 9.5px;

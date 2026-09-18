@@ -1,0 +1,202 @@
+:root {
+  --accent: #5B5FEF;
+  --accent-2: #8A6FEF;
+  --glow: rgba(91, 95, 239, 0.7);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #0b0b12;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+}
+
+#stage {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+}
+
+#video {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  display: block;
+}
+
+/* ---------- center play/pause flash ---------- */
+.centerPlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: none;
+}
+.centerPlay svg {
+  width: 64px;
+  height: 64px;
+  opacity: 0;
+  transform: scale(0.85);
+  filter: drop-shadow(0 6px 24px rgba(0,0,0,0.6));
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+.centerPlay.show svg { opacity: 0.92; transform: scale(1); }
+
+/* ---------- buffering spinner ---------- */
+.spinner {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 44px; height: 44px;
+  margin: -22px 0 0 -22px;
+  border-radius: 50%;
+  border: 3px solid rgba(255,255,255,0.25);
+  border-top-color: #fff;
+  display: none;
+  animation: nexSpin 800ms linear infinite;
+}
+.spinner.show { display: block; }
+@keyframes nexSpin { to { transform: rotate(360deg); } }
+
+/* ---------- status toast (network retry / errors) ---------- */
+#status {
+  position: fixed;
+  top: 14px; left: 14px;
+  max-width: calc(100% - 28px);
+  color: #eef0fb;
+  font-size: 12.5px;
+  background: rgba(20, 20, 30, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 8px 14px;
+  border-radius: 10px;
+  display: none;
+  z-index: 40;
+}
+
+/* ---------- controls bar ---------- */
+.controls {
+  position: absolute;
+  left: 8px; right: 8px; bottom: 8px;
+  z-index: 30;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: 12px 14px 8px;
+  box-shadow: 0 12px 36px -8px rgba(0,0,0,0.6);
+  color: #fff;
+  transition: transform 250ms ease, opacity 250ms ease;
+}
+.controls.hidden {
+  transform: translateY(14px);
+  opacity: 0;
+  pointer-events: none;
+}
+#stage.idle { cursor: none; }
+
+/* ---------- seek bar ---------- */
+.seek {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  transition: height 150ms ease;
+}
+.seek:hover, .seek.dragging { height: 9px; }
+.seekTrack { position: absolute; inset: 0; border-radius: 999px; background: rgba(255,255,255,0.2); }
+.seekBuffered {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  border-radius: 999px; background: rgba(255,255,255,0.35);
+  width: 0%;
+}
+.seekPlayed {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 10px -1px var(--glow);
+  width: 0%;
+}
+.seekHandle {
+  position: absolute; top: 50%; left: 0%;
+  width: 12px; height: 12px; margin-left: -6px;
+  border-radius: 50%; background: #fff;
+  border: 2px solid var(--accent);
+  transform: translateY(-50%) scale(0.7);
+  opacity: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+.seek:hover .seekHandle, .seek.dragging .seekHandle {
+  opacity: 1; transform: translateY(-50%) scale(1);
+}
+
+/* ---------- controls row ---------- */
+.controlsRow { display: flex; align-items: center; gap: 2px; }
+
+.ctrlBtn {
+  display: flex; align-items: center; justify-content: center;
+  padding: 7px; border-radius: 9px;
+  background: transparent; border: none;
+  color: rgba(255,255,255,0.9); cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+.ctrlBtn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+.ctrlBtn svg { display: block; }
+
+.volGroup { display: flex; align-items: center; }
+.volSlider { width: 0; overflow: hidden; transition: width 200ms ease; }
+.volGroup:hover .volSlider, .volGroup.active .volSlider { width: 72px; }
+.volSlider input[type="range"] {
+  width: 64px; margin: 0 4px 0 2px;
+  accent-color: var(--accent); cursor: pointer;
+}
+
+.timeDisplay {
+  margin-left: 6px; font-size: 12.5px; font-weight: 600;
+  white-space: nowrap; color: rgba(255,255,255,0.95);
+  font-variant-numeric: tabular-nums;
+}
+.timeDisplay .sep { font-weight: 400; color: rgba(255,255,255,0.5); }
+
+.spacer { flex: 1; }
+
+/* ---------- settings popover ---------- */
+.settingsWrap { position: relative; }
+.settingsMenu {
+  position: absolute; bottom: 42px; right: 0;
+  background: rgba(18, 18, 26, 0.92);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  padding: 8px;
+  min-width: 160px;
+  display: none;
+  box-shadow: 0 14px 34px rgba(0,0,0,0.55);
+}
+.settingsMenu.open { display: block; }
+.settingsSection { display: flex; flex-direction: column; gap: 1px; }
+.settingsLabel {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: rgba(255,255,255,0.45); margin: 6px 6px 3px;
+}
+.settingsLabel:first-child { margin-top: 2px; }
+.settingsOpt {
+  display: flex; justify-content: space-between; align-items: center;
+  background: transparent; border: none;
+  color: rgba(255,255,255,0.85);
+  padding: 6px 8px; border-radius: 8px;
+  font-size: 12.5px; cursor: pointer; text-align: left;
+}
+.settingsOpt:hover { background: rgba(255,255,255,0.09); }
+.settingsOpt.active { color: var(--accent); font-weight: 700; }
+.settingsOpt.active::after { content: "✓"; font-size: 11px; }
