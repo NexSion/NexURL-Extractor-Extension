@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>NexURL-Extractor — Settings</title>
+<link rel="icon" href="icons/icon48.png" />
+<link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <img src="icons/icon48.png" class="logo" alt="" />
+        <div>
+          <div class="title">NexURL-Extractor</div>
+          <div class="subtitle">Detection settings</div>
+        </div>
+      </div>
+    </header>
+
+    <p class="blurb">
+      By default every video, audio, and image format is detected on every
+      site. Rules here (or the 🚫 buttons on a toast) turn detection fully
+      off for a format or a whole site — it won't show up in the popup
+      list, and no toast will fire for it either.
+    </p>
+
+    <section class="panel" id="addPanel">
+      <h2>Add a site rule</h2>
+      <div class="addRow">
+        <input id="domainInput" type="text" placeholder="e.g. example.com" />
+        <button id="addSiteBtn" class="primaryBtn">Add site</button>
+      </div>
+      <div class="hint">Just the domain — no https:// or trailing slash.</div>
+    </section>
+
+    <section class="panel">
+      <div class="panelHeadRow">
+        <h2>Site rules</h2>
+        <span id="siteCount" class="countBadge">0</span>
+      </div>
+      <div id="siteList" class="siteList"></div>
+      <div id="emptyState" class="emptyState">
+        No site rules yet. Mute something from a toast, or add a site above.
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span class="ver">v1.0.0 · NexApp</span>
+    </footer>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

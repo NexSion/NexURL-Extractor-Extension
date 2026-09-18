@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>NexURL-Extractor</title>
+<link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon48.png" alt="NexURL-Extractor" class="logo" />
+      <div class="brandText">
+        <div class="title">NexURL-Extractor</div>
+        <div class="subtitle">by NexApp</div>
+      </div>
+    </div>
+    <button id="settingsBtn" title="Detection settings">⚙</button>
+    <button id="rescanBtn" title="Rescan page">⟳</button>
+  </header>
+
+  <div class="searchRow">
+    <input type="text" id="searchInput" placeholder="Filter by URL or extension..." />
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-filter="all">All <span class="count" id="count-all">0</span></button>
+    <button class="tab" data-filter="video">Videos <span class="count" id="count-video">0</span></button>
+    <button class="tab" data-filter="audio">Audio <span class="count" id="count-audio">0</span></button>
+    <button class="tab" data-filter="image">Images <span class="count" id="count-image">0</span></button>
+  </div>
+
+  <div class="listWrap">
+    <ul id="mediaList" class="mediaList"></ul>
+    <div id="emptyState" class="emptyState">No media detected yet. Scroll the page or hit rescan.</div>
+  </div>
+
+  <footer class="footer">
+    <button id="copyAllBtn">Copy All Visible</button>
+    <span class="ver">v1.0.0</span>
+  </footer>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>
